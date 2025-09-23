@@ -14,8 +14,10 @@
     "dayjs": "^1.11.13",
     "element-plus": "^2.9.7",
     "langchain": "^0.3.34",
+    "openai": "^5.22.1",
     "pinia": "^3.0.1",
     "pinia-plugin-persistedstate": "^4.2.0",
+    "ts": "^0.2.2",
     "vue": "^3.5.13",
     "vue-router": "^4.5.0"
   },
