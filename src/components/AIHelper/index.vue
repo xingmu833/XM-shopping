@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-
+import { ref, onMounted, watch } from 'vue'
 
 const drawerVisible = ref(false);
 const openDrawer = () => {
-  drawerVisible.value =  !drawerVisible.value;
+  drawerVisible.value = !drawerVisible.value;
   console.log('openDrawer', drawerVisible.value);
 }
 
@@ -33,13 +32,178 @@ import OpenAI from "openai";
 const openai = new OpenAI(
   {
     // 若没有配置环境变量，请用百炼API Key将下行替换为：apiKey: "sk-xxx",
-    apiKey: "",
+    apiKey: "sk-a20cc41728144eb586f9ed55dcca3162",
     baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     dangerouslyAllowBrowser: true, // ⚠️ 明知风险仍启用
   }
 );
 const userMessages = ref("");
 
+// 消息接口定义
+interface Message {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: Date;
+}
+
+// 聊天历史接口定义
+interface ChatHistory {
+  id: string;
+  label: string;
+  createTime: Date;
+  messages: Message[];
+}
+
+// 当前聊天消息列表
+const messageList = ref<Message[]>([
+  {
+    role: 'assistant',
+    content: '您好！我是AI购物助手，有什么可以帮助您的吗？',
+    timestamp: new Date()
+  }
+]);
+
+// 历史记录列表
+const historyList = ref<ChatHistory[]>([]);
+
+// 当前聊天ID
+const currentChatId = ref<string>('');
+
+// 加载状态
+const isLoading = ref(false);
+
+// 格式化时间显示
+const formatTime = (date: Date) => {
+  const d = new Date(date);
+  const hours = d.getHours().toString().padStart(2, '0');
+  const minutes = d.getMinutes().toString().padStart(2, '0');
+  const seconds = d.getSeconds().toString().padStart(2, '0');
+  return `${hours}:${minutes}:${seconds}`;
+};
+
+// 格式化日期为聊天标题
+const formatChatTitle = (date: Date): string => {
+  const d = new Date(date);
+  const month = d.getMonth() + 1;
+  const day = d.getDate();
+  const hours = d.getHours().toString().padStart(2, '0');
+  const minutes = d.getMinutes().toString().padStart(2, '0');
+  return `聊天 ${month}月${day}日 ${hours}:${minutes}`;
+};
+
+// 保存当前聊天到历史记录
+const saveCurrentChatToHistory = () => {
+  // 如果当前有用户消息，才保存到历史记录
+  const hasUserMessage = messageList.value.some(msg => msg.role === 'user');
+  if (!hasUserMessage) return;
+
+  const now = new Date();
+  const chatTitle = formatChatTitle(now);
+  
+  if (currentChatId.value) {
+    // 更新现有聊天
+    const existingIndex = historyList.value.findIndex(h => h.id === currentChatId.value);
+    if (existingIndex !== -1) {
+      historyList.value[existingIndex].messages = [...messageList.value];
+    }
+  } else {
+    // 创建新聊天记录
+    const newChat: ChatHistory = {
+      id: `chat-${Date.now()}`,
+      label: chatTitle,
+      createTime: now,
+      messages: [...messageList.value]
+    };
+    historyList.value.unshift(newChat);
+    currentChatId.value = newChat.id;
+  }
+  
+  // 保存到本地存储
+  saveHistoryToLocalStorage();
+};
+
+// 从本地存储加载历史记录
+const loadHistoryFromLocalStorage = () => {
+  try {
+    const saved = localStorage.getItem('aiChatHistory');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      // 转换时间字符串为Date对象
+      historyList.value = parsed.map((chat: any) => ({
+        ...chat,
+        createTime: new Date(chat.createTime),
+        messages: chat.messages.map((msg: any) => ({
+          ...msg,
+          timestamp: new Date(msg.timestamp)
+        }))
+      }));
+    }
+  } catch (error) {
+    console.error('加载历史记录失败:', error);
+  }
+};
+
+// 保存历史记录到本地存储
+const saveHistoryToLocalStorage = () => {
+  try {
+    localStorage.setItem('aiChatHistory', JSON.stringify(historyList.value));
+  } catch (error) {
+    console.error('保存历史记录失败:', error);
+  }
+};
+
+// 新建聊天
+const createNewChat = () => {
+  // 先保存当前聊天（如果有内容）
+  saveCurrentChatToHistory();
+  
+  // 重置当前聊天
+  messageList.value = [
+    {
+      role: 'assistant',
+      content: '您好！我是AI购物助手，有什么可以帮助您的吗？',
+      timestamp: new Date()
+    }
+  ];
+  currentChatId.value = '';
+};
+
+// 清空聊天记录
+const clearChat = () => {
+  messageList.value = [
+    {
+      role: 'assistant',
+      content: '您好！我是AI购物助手，有什么可以帮助您的吗？',
+      timestamp: new Date()
+    }
+  ];
+  currentChatId.value = '';
+};
+
+// 加载历史聊天
+const loadHistoryChat = (chatId: string) => {
+  const chat = historyList.value.find(h => h.id === chatId);
+  if (chat) {
+    messageList.value = [...chat.messages];
+    currentChatId.value = chatId;
+  }
+};
+
+// 删除历史记录
+const deleteHistoryChat = (chatId: string) => {
+  const index = historyList.value.findIndex(h => h.id === chatId);
+  if (index !== -1) {
+    historyList.value.splice(index, 1);
+    saveHistoryToLocalStorage();
+    
+    // 如果删除的是当前聊天，重置当前聊天
+    if (chatId === currentChatId.value) {
+      clearChat();
+    }
+  }
+};
+
+// 发送消息
 const fetchStreamData = async (userInput: string) => {
   if (!userInput.trim()) return;
   
@@ -50,8 +214,10 @@ const fetchStreamData = async (userInput: string) => {
     timestamp: new Date()
   };
   messageList.value.push(userMessage);
+  
   // 清空输入框
   userMessages.value = '';
+  
   // 显示加载状态
   isLoading.value = true;
   
@@ -63,6 +229,7 @@ const fetchStreamData = async (userInput: string) => {
         ...messageList.value.filter(msg => msg.role !== 'system').map(msg => ({ role: msg.role, content: msg.content }))
       ],
     });
+    
     // 添加AI回复到消息列表
     if (completion.choices && completion.choices[0]?.message?.content) {
       const aiMessage: Message = {
@@ -71,6 +238,9 @@ const fetchStreamData = async (userInput: string) => {
         timestamp: new Date()
       };
       messageList.value.push(aiMessage);
+      
+      // 保存到历史记录
+      saveCurrentChatToHistory();
     }
     console.log(completion);
   } catch (error) {
@@ -88,43 +258,17 @@ const fetchStreamData = async (userInput: string) => {
   }
 };
 
-// 添加消息列表存储对话历史
-interface Message {
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  timestamp: Date;
-}
-
-const messageList = ref<Message[]>([
-  {
-    role: 'assistant',
-    content: '您好！我是AI购物助手，有什么可以帮助您的吗？',
-    timestamp: new Date()
+// 监听抽屉关闭，保存当前聊天
+watch(drawerVisible, (newVal) => {
+  if (!newVal) {
+    saveCurrentChatToHistory();
   }
-]);
-const isLoading = ref(false);
+});
 
-// 清空聊天记录
-const clearChat = () => {
-  messageList.value = [
-    {
-      role: 'assistant',
-      content: '您好！我是AI购物助手，有什么可以帮助您的吗？',
-      timestamp: new Date()
-    }
-  ];
-};
-
-// 历史记录列表
-const historyList = ref([]);
-
-const formatTime = (date: Date) => {
-  const d = new Date(date);
-  const hours = d.getHours().toString().padStart(2, '0');
-  const minutes = d.getMinutes().toString().padStart(2, '0');
-  const seconds = d.getSeconds().toString().padStart(2, '0');
-  return `${hours}:${minutes}:${seconds}`;
-};
+// 组件挂载时加载历史记录
+onMounted(() => {
+  loadHistoryFromLocalStorage();
+});
 
 </script>
 
@@ -146,21 +290,35 @@ const formatTime = (date: Date) => {
   >
     <div class="common-layout">
       <el-container>
-        <el-aside width="150px">
+        <el-aside width="180px">
           <div class="aside-content">
-            <div style="display: flex; flex-wrap: wrap; justify-content: space-between;">
-              <el-button class="clear-chat-btn" type="primary">新建聊天</el-button>
-              <el-button type="warning" class="clear-chat-btn" @click="clearChat">清空聊天</el-button>
+            <div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin-bottom: 16px;">
+              <el-button class="clear-chat-btn" type="primary" size="small" @click="createNewChat">新建聊天</el-button>
+              <el-button type="warning" class="clear-chat-btn" size="small" @click="clearChat">清空聊天</el-button>
             </div>
             <div class="quick-questions">
               <p class="quick-title">历史记录</p>
-              <el-tag 
+              <div 
                 v-for="item in historyList"
-                :key="item.value"
-                class="quick-tag"
+                :key="item.id"
+                class="history-item"
+                :class="{ 'active': currentChatId === item.id }"
+                @click="loadHistoryChat(item.id)"
               >
-                {{ item.label }}
-              </el-tag>
+                <el-tag class="quick-tag">
+                  {{ item.label }}
+                  <el-button 
+                    type="text" 
+                    size="small" 
+                    class="delete-btn"
+                    @click.stop="deleteHistoryChat(item.id)"
+                    title="删除此聊天记录"
+                  >
+                    ×
+                  </el-button>
+                </el-tag>
+              </div>
+              <p v-if="historyList.length === 0" class="no-history">暂无历史记录</p>
             </div>
           </div>
         </el-aside>
@@ -168,13 +326,13 @@ const formatTime = (date: Date) => {
           <el-header>
             <div style="display: flex; align-items: center;">
               <p>当前模型：</p>
-              <select v-model="valueSelect" placeholder="请选择模型" style="width: 100px;height: 30px;">
+              <select v-model="valueSelect" placeholder="请选择模型" style="width: 150px; height: 30px; margin-left: 10px;">
                 <option
                   v-for="item in options"
                   :key="item.value"
                   :label="item.label"
                   :value="item.value"
-                />
+                >{{ item.label }}</option>
               </select>
             </div>
           </el-header>
@@ -229,4 +387,42 @@ const formatTime = (date: Date) => {
 @import '@/styles/var.scss';
 
 @import '@/styles/ai.scss';
+
+// 历史记录相关样式
+.history-item {
+  margin-bottom: 8px;
+  cursor: pointer;
+  position: relative;
+  
+  &:hover {
+    .delete-btn {
+      display: inline;
+    }
+  }
+  
+  &.active {
+    .quick-tag {
+      background-color: $xtxColor;
+      color: white;
+    }
+  }
+}
+
+.delete-btn {
+  display: none;
+  font-size: 16px;
+  margin-left: 4px;
+  color: inherit;
+  
+  &:hover {
+    opacity: 0.7;
+  }
+}
+
+.no-history {
+  font-size: 12px;
+  color: #999;
+  text-align: center;
+  margin-top: 20px;
+}
 </style>
