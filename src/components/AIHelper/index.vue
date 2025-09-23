@@ -2,6 +2,7 @@
 import { ref, onMounted, watch } from 'vue'
 import { marked } from 'marked';
 
+// 使用SSE直接调用API，不再需要OpenAI客户端实例
 const drawerVisible = ref(false);
 const openDrawer = () => {
   drawerVisible.value = !drawerVisible.value;
@@ -27,17 +28,6 @@ const options = [
     label: 'GLM-4.5'
   }
 ];
-
-import OpenAI from "openai";
-
-const openai = new OpenAI(
-  {
-    // 若没有配置环境变量，请用百炼API Key将下行替换为：apiKey: "sk-xxx",
-    apiKey: "sk-a20cc41728144eb586f9ed55dcca3162",
-    baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    dangerouslyAllowBrowser: true, // ⚠️ 明知风险仍启用
-  }
-);
 const userMessages = ref("");
 
 // 消息接口定义
@@ -209,7 +199,7 @@ const deleteHistoryChat = (chatId: string) => {
   }
 };
 
-// 发送消息
+// 发送消息（使用SSE流式通信）
 const fetchStreamData = async (userInput: string) => {
   if (!userInput.trim()) return;
   
@@ -227,37 +217,88 @@ const fetchStreamData = async (userInput: string) => {
   // 显示加载状态
   isLoading.value = true;
   
+  // 创建AI回复的临时消息
+  let aiMessageIndex = messageList.value.length;
+  let aiMessage: Message = {
+    role: 'assistant',
+    content: '',
+    timestamp: new Date()
+  };
+  messageList.value.push(aiMessage);
+  
   try {
-    const completion = await openai.chat.completions.create({
-      model: `${valueSelect.value}`,  //此处以qwen-plus为例，可按需更换模型名称
-      messages: [
-        { role: "system", content: "You are a helpful assistant." },
-        ...messageList.value.filter(msg => msg.role !== 'system').map(msg => ({ role: msg.role, content: msg.content }))
-      ],
+    // 使用fetch的流式响应
+    const response = await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer `
+      },
+      body: JSON.stringify({
+        model: valueSelect.value,
+        messages: [
+          { role: "system", content: "You are a helpful assistant." },
+          ...messageList.value.filter(msg => msg.role !== 'system' && msg.role !== 'assistant').map(msg => ({ 
+            role: msg.role, 
+            content: msg.content 
+          }))
+        ],
+        stream: true
+      })
     });
     
-    // 添加AI回复到消息列表
-    if (completion.choices && completion.choices[0]?.message?.content) {
-      const aiMessage: Message = {
-        role: 'assistant',
-        content: completion.choices[0].message.content,
-        timestamp: new Date()
-      };
-      messageList.value.push(aiMessage);
-      
-      // 保存到历史记录
-      saveCurrentChatToHistory();
+    if (!response.ok || !response.body) {
+      throw new Error(`HTTP error! status: ${response.status}`);
     }
-    console.log(completion);
+    
+    // 创建reader
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullContent = '';
+    
+    // 读取流数据
+    while (true) {
+      const { done, value } = await reader.read();
+      
+      if (done) {
+        break;
+      }
+      
+      // 解码并处理数据
+      const chunk = decoder.decode(value, { stream: true });
+      
+      // 分割SSE事件
+      const lines = chunk.split('\n');
+      for (const line of lines) {
+        if (line.startsWith('data:')) {
+          const data = line.slice(5).trim();
+          if (data === '[DONE]') {
+            break;
+          }
+          
+          try {
+            const jsonData = JSON.parse(data);
+            if (jsonData.choices && jsonData.choices[0]?.delta?.content) {
+              // 更新AI回复内容
+              fullContent += jsonData.choices[0].delta.content;
+              messageList.value[aiMessageIndex].content = fullContent;
+              messageList.value[aiMessageIndex].timestamp = new Date();
+            }
+          } catch (e) {
+            console.error('解析SSE数据失败:', e);
+          }
+        }
+      }
+    }
+    
+    // 保存到历史记录
+    saveCurrentChatToHistory();
+    
   } catch (error) {
     console.error('API调用错误:', error);
-    // 添加错误消息
-    const errorMessage: Message = {
-      role: 'assistant',
-      content: '抱歉，我现在无法为您提供帮助，请稍后再试。',
-      timestamp: new Date()
-    };
-    messageList.value.push(errorMessage);
+    // 更新错误消息
+    messageList.value[aiMessageIndex].content = '抱歉，我现在无法为您提供帮助，请稍后再试。';
+    messageList.value[aiMessageIndex].timestamp = new Date();
   } finally {
     // 隐藏加载状态
     isLoading.value = false;
@@ -399,119 +440,4 @@ onMounted(() => {
 @import '@/styles/var.scss';
 
 @import '@/styles/ai.scss';
-
-// 历史记录相关样式
-.history-item {
-  margin-bottom: 8px;
-  cursor: pointer;
-  position: relative;
-  
-  &:hover {
-    .delete-btn {
-      display: inline;
-    }
-  }
-  
-  &.active {
-    .quick-tag {
-      background-color: $xtxColor;
-      color: white;
-    }
-  }
-}
-
-.delete-btn {
-  display: none;
-  font-size: 16px;
-  margin-left: 4px;
-  color: inherit;
-  
-  &:hover {
-    opacity: 0.7;
-  }
-}
-
-.no-history {
-  font-size: 12px;
-  color: #999;
-  text-align: center;
-  margin-top: 20px;
-}
-// Markdown内容样式
-.markdown-content {
-  line-height: 1.6;
-  
-  h1, h2, h3, h4, h5, h6 {
-    margin: 16px 0 8px 0;
-    color: #333;
-  }
-  
-  p {
-    margin-bottom: 12px;
-  }
-  
-  ul, ol {
-    margin: 12px 0;
-    padding-left: 24px;
-  }
-  
-  li {
-    margin-bottom: 4px;
-  }
-  
-  blockquote {
-    border-left: 4px solid $xtxColor;
-    margin: 16px 0;
-    padding: 8px 16px;
-    background-color: #f5f7fa;
-    color: #666;
-  }
-  
-  code {
-    background-color: #f5f5f5;
-    padding: 2px 6px;
-    border-radius: 4px;
-    font-family: 'Courier New', monospace;
-    font-size: 0.9em;
-  }
-  
-  pre {
-    background-color: #f5f5f5;
-    padding: 12px;
-    border-radius: 4px;
-    overflow-x: auto;
-    margin: 16px 0;
-    
-    code {
-      background-color: transparent;
-      padding: 0;
-    }
-  }
-  
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 16px 0;
-  }
-  
-  th, td {
-    border: 1px solid #e0e0e0;
-    padding: 8px 12px;
-    text-align: left;
-  }
-  
-  th {
-    background-color: #f5f7fa;
-    font-weight: 600;
-  }
-  
-  a {
-    color: $xtxColor;
-    text-decoration: none;
-    
-    &:hover {
-      text-decoration: underline;
-    }
-  }
-}
 </style>
