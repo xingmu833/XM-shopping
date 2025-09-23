@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
+import { marked } from 'marked';
 
 const drawerVisible = ref(false);
 const openDrawer = () => {
@@ -79,6 +80,11 @@ const formatTime = (date: Date) => {
   const minutes = d.getMinutes().toString().padStart(2, '0');
   const seconds = d.getSeconds().toString().padStart(2, '0');
   return `${hours}:${minutes}:${seconds}`;
+};
+
+// 解析markdown文本为HTML
+const parseMarkdown = (text: string): string => {
+  return marked.parse(text) as string;
 };
 
 // 格式化日期为聊天标题
@@ -347,7 +353,13 @@ onMounted(() => {
                   {{ message.role === 'user' ? 'U' : 'AI' }}
                 </div>
                 <div class="message-content">
-                  <div class="message-text">{{ message.content }}</div>
+                  <div 
+                    class="message-text" 
+                    :class="{ 'markdown-content': message.role === 'assistant' }"
+                    v-if="message.role === 'assistant'"
+                    v-html="parseMarkdown(message.content)"
+                  ></div>
+                  <div v-else class="message-text">{{ message.content }}</div>
                   <div class="message-time">{{ formatTime(message.timestamp) }}</div>
                 </div>
               </div>
@@ -424,5 +436,82 @@ onMounted(() => {
   color: #999;
   text-align: center;
   margin-top: 20px;
+}
+// Markdown内容样式
+.markdown-content {
+  line-height: 1.6;
+  
+  h1, h2, h3, h4, h5, h6 {
+    margin: 16px 0 8px 0;
+    color: #333;
+  }
+  
+  p {
+    margin-bottom: 12px;
+  }
+  
+  ul, ol {
+    margin: 12px 0;
+    padding-left: 24px;
+  }
+  
+  li {
+    margin-bottom: 4px;
+  }
+  
+  blockquote {
+    border-left: 4px solid $xtxColor;
+    margin: 16px 0;
+    padding: 8px 16px;
+    background-color: #f5f7fa;
+    color: #666;
+  }
+  
+  code {
+    background-color: #f5f5f5;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9em;
+  }
+  
+  pre {
+    background-color: #f5f5f5;
+    padding: 12px;
+    border-radius: 4px;
+    overflow-x: auto;
+    margin: 16px 0;
+    
+    code {
+      background-color: transparent;
+      padding: 0;
+    }
+  }
+  
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+  }
+  
+  th, td {
+    border: 1px solid #e0e0e0;
+    padding: 8px 12px;
+    text-align: left;
+  }
+  
+  th {
+    background-color: #f5f7fa;
+    font-weight: 600;
+  }
+  
+  a {
+    color: $xtxColor;
+    text-decoration: none;
+    
+    &:hover {
+      text-decoration: underline;
+    }
+  }
 }
 </style>
